@@ -1,0 +1,14 @@
+# Generated/rebuilt, never committed
+*.db
+*.db.gz
+__pycache__/
+*.pyc
+
+# Secrets
+.env
+
+# Local venv for the upload script
+venv/
+
+# Scratch workspace for the executing-plans skill (ledger, briefs)
+.superpowers/
