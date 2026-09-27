@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: ca-gl-proceedings-search
+    env: python
+    buildCommand: "python3 scripts/build_db.py"
+    startCommand: "python3 webapp.py"
+    envVars:
+      - key: PDF_BASE_URL
+        sync: false
