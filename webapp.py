@@ -8,6 +8,7 @@ source PDF hosted on Cloudflare R2.
 Local run:
     PDF_BASE_URL=https://pub-xxxx.r2.dev python3 webapp.py [port]
 """
+import html
 import json
 import os
 import re
@@ -30,6 +31,23 @@ def year_of(label):
 
 def pdf_url(base_url, filename, page):
     return f"{base_url.rstrip('/')}/{urllib.parse.quote(filename)}#page={page}"
+
+
+def clamp(value, low, high):
+    return max(low, min(high, value))
+
+
+# SQLite's snippet() is asked to wrap matches in these control-character
+# sentinels rather than literal HTML tags, so OCR noise containing a real
+# '<' or '&' in the page text can be safely html-escaped afterward without
+# also escaping our own highlight markup.
+SNIPPET_MARK_START = "\x02"
+SNIPPET_MARK_END = "\x03"
+
+
+def escape_snippet(raw_snippet):
+    escaped = html.escape(raw_snippet)
+    return escaped.replace(SNIPPET_MARK_START, "<mark>").replace(SNIPPET_MARK_END, "</mark>")
 
 
 def load_pdf_map(mapping_path):
@@ -178,7 +196,12 @@ async function runSearch(append) {
     data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Search failed');
   } catch (e) {
-    document.getElementById('results').innerHTML = `<div class="error">Search error: ${e.message}. Check your query syntax (unbalanced quotes, etc).</div>`;
+    const errorDiv = document.createElement('div');
+    errorDiv.className = 'error';
+    errorDiv.textContent = `Search error: ${e.message}. Check your query syntax (unbalanced quotes, etc).`;
+    const resultsBox = document.getElementById('results');
+    resultsBox.innerHTML = '';
+    resultsBox.appendChild(errorDiv);
     document.getElementById('meta').textContent = '';
     document.getElementById('loadmore').style.display = 'none';
     return;
@@ -251,11 +274,16 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/search":
             q = (qs.get("q") or [""])[0].strip()
-            volume_id_raw = (qs.get("volume_id") or [""])[0].strip()
-            limit = int((qs.get("limit") or ["25"])[0])
-            offset = int((qs.get("offset") or ["0"])[0])
             if not q:
                 self._send_json({"results": [], "total": 0})
+                return
+
+            volume_id_raw = (qs.get("volume_id") or [""])[0].strip()
+            try:
+                limit = clamp(int((qs.get("limit") or ["25"])[0]), 1, 100)
+                offset = clamp(int((qs.get("offset") or ["0"])[0]), 0, 10_000_000)
+            except ValueError:
+                self._send_json({"error": "limit and offset must be integers"}, status=400)
                 return
 
             volume_id = None
@@ -269,7 +297,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 sql = """
                     SELECT volume_label, volume_id, page_num,
-                           snippet(pages_fts, 0, '<mark>', '</mark>', ' … ', 24)
+                           snippet(pages_fts, 0, x'02', x'03', ' … ', 24)
                     FROM pages_fts
                     WHERE pages_fts MATCH ?
                 """
@@ -285,7 +313,7 @@ class Handler(BaseHTTPRequestHandler):
                 sql += " ORDER BY rank LIMIT ? OFFSET ?"
                 params += [limit, offset]
                 rows = CONN.execute(sql, params).fetchall()
-            except sqlite3.OperationalError as e:
+            except (sqlite3.OperationalError, OverflowError) as e:
                 self._send_json({"error": str(e)}, status=400)
                 return
 
@@ -299,7 +327,7 @@ class Handler(BaseHTTPRequestHandler):
                         "volume_label": label,
                         "volume_id": vid,
                         "page_num": page,
-                        "snippet": snippet,
+                        "snippet": escape_snippet(snippet),
                         "pdf": pdf,
                         "pdf_url": pdf_url(PDF_BASE_URL, pdf, page) if pdf and PDF_BASE_URL else None,
                     }

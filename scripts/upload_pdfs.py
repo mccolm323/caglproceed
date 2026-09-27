@@ -45,6 +45,20 @@ def list_remote_keys(client, bucket):
     return keys
 
 
+def upload_all(client, bucket, source_dir, filenames):
+    """Upload each filename from source_dir to bucket, tagged as application/pdf.
+
+    boto3, unlike the AWS CLI, does not infer Content-Type — without this,
+    R2 would serve every PDF as application/octet-stream and browsers would
+    download instead of viewing it, breaking '#page=N' links.
+    """
+    for i, name in enumerate(filenames, start=1):
+        path = os.path.join(source_dir, name)
+        size_mb = os.path.getsize(path) / (1024 * 1024)
+        print(f"[{i}/{len(filenames)}] Uploading {name} ({size_mb:.1f} MB)...")
+        client.upload_file(path, bucket, name, ExtraArgs={"ContentType": "application/pdf"})
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--source-dir", default=DEFAULT_SOURCE_DIR)
@@ -79,11 +93,7 @@ def main():
     to_upload = plan_uploads(local_files, already_uploaded)
     print(f"{len(already_uploaded)} already in bucket, {len(to_upload)} to upload")
 
-    for i, name in enumerate(to_upload, start=1):
-        path = os.path.join(args.source_dir, name)
-        size_mb = os.path.getsize(path) / (1024 * 1024)
-        print(f"[{i}/{len(to_upload)}] Uploading {name} ({size_mb:.1f} MB)...")
-        client.upload_file(path, bucket, name)
+    upload_all(client, bucket, args.source_dir, to_upload)
 
     print("Done.")
 

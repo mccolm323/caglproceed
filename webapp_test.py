@@ -11,6 +11,33 @@ from http.server import ThreadingHTTPServer
 import webapp
 
 
+class TestEscapeSnippet(unittest.TestCase):
+    def test_escapes_stray_angle_brackets_from_ocr_noise(self):
+        # SQLite's snippet() wraps matches in sentinel control chars, not
+        # literal HTML, precisely so OCR noise like this can't be read as
+        # a real tag and swallow following text in the browser.
+        raw = f"Gran{chr(2)}dl{chr(3)} <Secretary> reported"
+        self.assertEqual(
+            webapp.escape_snippet(raw),
+            "Gran<mark>dl</mark> &lt;Secretary&gt; reported",
+        )
+
+    def test_escapes_ampersand(self):
+        raw = f"Board {chr(2)}of{chr(3)} & Trustees"
+        self.assertEqual(webapp.escape_snippet(raw), "Board <mark>of</mark> &amp; Trustees")
+
+
+class TestClamp(unittest.TestCase):
+    def test_clamps_below_minimum(self):
+        self.assertEqual(webapp.clamp(-5, 1, 100), 1)
+
+    def test_clamps_above_maximum(self):
+        self.assertEqual(webapp.clamp(500, 1, 100), 100)
+
+    def test_within_range_is_unchanged(self):
+        self.assertEqual(webapp.clamp(50, 1, 100), 50)
+
+
 class TestPdfUrl(unittest.TestCase):
     def test_builds_url_with_page_fragment(self):
         url = webapp.pdf_url("https://pub-xxxx.r2.dev", "Proceedings_2020.pdf", 42)
@@ -64,6 +91,13 @@ class TestServer(unittest.TestCase):
             "INSERT INTO pages_fts (content, volume_label, volume_id, page_num) "
             "VALUES ('the gavel was passed', 'Proceedings 1875', 2, 3)"
         )
+        conn.execute(
+            "INSERT INTO volumes VALUES (3, 'Proceedings 1901', 'Proceedings_1901.txt', 1, 20)"
+        )
+        conn.execute(
+            "INSERT INTO pages_fts (content, volume_label, volume_id, page_num) "
+            "VALUES ('the Grand <Secretary> reported to the lodge', 'Proceedings 1901', 3, 9)"
+        )
         conn.commit()
         conn.close()
 
@@ -93,7 +127,7 @@ class TestServer(unittest.TestCase):
     def test_volumes_endpoint_lists_the_fixture_volumes(self):
         status, data = self._get("/api/volumes")
         self.assertEqual(status, 200)
-        self.assertEqual(len(data["volumes"]), 2)
+        self.assertEqual(len(data["volumes"]), 3)
 
     def test_search_finds_matching_page_with_pdf_link(self):
         status, data = self._get("/api/search?q=warren")
@@ -128,6 +162,35 @@ class TestServer(unittest.TestCase):
         result = data["results"][0]
         self.assertIsNone(result["pdf"])
         self.assertIsNone(result["pdf_url"])
+
+    def test_snippet_with_ocr_angle_bracket_noise_is_escaped_not_swallowed(self):
+        status, data = self._get("/api/search?q=secretary")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["total"], 1)
+        snippet = data["results"][0]["snippet"]
+        self.assertIn("&lt;<mark>Secretary</mark>&gt;", snippet)
+
+    def test_non_integer_limit_returns_json_error_not_crash(self):
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self._get("/api/search?q=warren&limit=not-a-number")
+        self.assertEqual(ctx.exception.code, 400)
+        body = json.loads(ctx.exception.read())
+        self.assertIn("error", body)
+
+    def test_negative_limit_is_clamped_not_passed_through_as_unlimited(self):
+        # -1 is SQLite's "no limit" sentinel; a client must not be able to
+        # request an unbounded dump of results via a negative limit.
+        status, data = self._get("/api/search?q=warren&limit=-1")
+        self.assertEqual(status, 200)
+
+    def test_huge_volume_id_returns_json_error_not_crash(self):
+        # A value this large overflows SQLite's 64-bit integer binding and
+        # raises OverflowError from CONN.execute(), not from int() parsing.
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self._get("/api/search?q=warren&volume_id=99999999999999999999999999")
+        self.assertEqual(ctx.exception.code, 400)
+        body = json.loads(ctx.exception.read())
+        self.assertIn("error", body)
 
 
 if __name__ == "__main__":
