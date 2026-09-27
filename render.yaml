@@ -1,7 +1,7 @@
 services:
   - type: web
     name: ca-gl-proceedings-search
-    env: python
+    runtime: python
     buildCommand: "python3 scripts/build_db.py"
     startCommand: "python3 webapp.py"
     envVars:
