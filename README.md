@@ -49,14 +49,20 @@ python3 -m unittest webapp_test -v
 2. In Render, choose **New > Blueprint** (not "Web Service" — only the
    Blueprint flow reads `render.yaml` automatically) and connect the
    repo. Render will read `render.yaml` and set up the build command
-   (`python3 scripts/build_db.py`) and start command (`python3 webapp.py`)
-   for you.
+   (`python3 scripts/build_db.py`), start command (`python3 webapp.py`),
+   and the **free** plan for you (pinned via `plan: free` in
+   `render.yaml`, so Render won't default you into a paid plan).
 3. Render's blueprint prompts for the `PDF_BASE_URL` env var (marked
    `sync: false` in `render.yaml`) — set it to your R2 bucket's public
    URL. You can also set/change it later from the service's Environment
    tab in Render's dashboard.
 4. Deploy. Render redeploys automatically on every push, rebuilding the
    search index from `source-text/` each time.
+
+Note: the free plan sleeps after 15 minutes of inactivity and takes
+~30-60s to wake up on the next visit. Upgrade to Starter (~$7/mo) later
+if you want it always-on — just remove or change `plan: free` in
+`render.yaml` and push.
 
 ## Adding new volumes later
 
